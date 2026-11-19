@@ -9,6 +9,11 @@ mining:
   address: ""
   # Mining runs in Java worker threads inside the Paper process.
   threads: 1
+limits:
+  # Average CPU duty cycle across each configured mining worker, from 0 to 100.
+  cpu-percent: 100
+  # OpenCL GPU duty cycle. CUDA/HIP child miners cannot be throttled by this plugin.
+  gpu-percent: 100
 gpu:
   # Used only by cuda and amd (HIP). OpenCL runs inside the Paper JVM.
   executable: "geocoin-gpu-miner.exe"

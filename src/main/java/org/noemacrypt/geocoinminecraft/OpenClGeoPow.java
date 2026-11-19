@@ -17,7 +17,9 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 
 /** OpenCL GeoPoW worker, executing the SHA-256 search in the selected device. */
@@ -55,7 +57,7 @@ final class OpenClGeoPow {
     }
 
     static Long mine(byte[] header, BigInteger target, int deviceId, AtomicBoolean active, AtomicBoolean cancelled,
-                     long deadlineNanos, LongConsumer rateUpdate) throws IOException {
+                     IntSupplier gpuLimit, long deadlineNanos, LongConsumer rateUpdate) throws IOException, InterruptedException {
         List<Device> devices = devices();
         if (deviceId < 0 || deviceId >= devices.size()) throw new IOException("OpenCL GPU id is no longer available; scan devices again");
         Device selected = devices.get(deviceId);
@@ -92,14 +94,22 @@ final class OpenClGeoPow {
             long start = System.nanoTime();
             final long batch = 65_536;
             while (active.get() && !cancelled.get() && System.nanoTime() < deadlineNanos) {
+                int percent = Math.max(0, Math.min(100, gpuLimit.getAsInt()));
+                if (percent == 0) {
+                    rateUpdate.accept(0);
+                    TimeUnit.MILLISECONDS.sleep(100);
+                    continue;
+                }
                 int[] zero = {0};
                 CL.clEnqueueWriteBuffer(queue, dFound, CL.CL_TRUE, 0, Sizeof.cl_int, Pointer.to(zero), 0, null, null);
                 long[] baseArg = {base}; long[] attemptsArg = {batch};
                 CL.clSetKernelArg(kernel, 2, Sizeof.cl_ulong, Pointer.to(baseArg));
                 CL.clSetKernelArg(kernel, 3, Sizeof.cl_ulong, Pointer.to(attemptsArg));
                 long[] global = {batch}; long[] local = {256};
+                long launchStart = System.nanoTime();
                 CL.clEnqueueNDRangeKernel(queue, kernel, 1, null, global, local, 0, null, null);
                 CL.clFinish(queue);
+                long launchNanos = Math.max(1, System.nanoTime() - launchStart);
                 int[] found = {0};
                 CL.clEnqueueReadBuffer(queue, dFound, CL.CL_TRUE, 0, Sizeof.cl_int, Pointer.to(found), 0, null, null);
                 total += batch;
@@ -111,6 +121,12 @@ final class OpenClGeoPow {
                     return winner[0];
                 }
                 base += batch;
+                long pauseNanos = launchNanos * (100L - percent) / percent;
+                while (pauseNanos > 0 && active.get() && !cancelled.get() && System.nanoTime() < deadlineNanos) {
+                    long part = Math.min(pauseNanos, TimeUnit.MILLISECONDS.toNanos(100));
+                    TimeUnit.NANOSECONDS.sleep(part);
+                    pauseNanos -= part;
+                }
             }
             return null;
         } catch (RuntimeException e) {

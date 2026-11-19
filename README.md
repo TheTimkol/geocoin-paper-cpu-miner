@@ -41,6 +41,26 @@ Other commands:
 - `/geocoin gpu status` — show selected backend/device and whether in-JVM OpenCL or the native miner is active.
 - `/geocoin start`, `/geocoin stop`, `/geocoin status` — manage the combined miner.
 
+## Resource limits
+
+Set the CPU duty cycle and the in-JVM OpenCL GPU duty cycle independently from chat:
+
+```text
+/geocoin limit cpu 50
+/geocoin limit gpu 35
+/geocoin limit status
+```
+
+Limits accept whole percentages from 0 to 100 and apply while mining is running. `0` pauses work on that device; `100` allows continuous work. CPU percentage is the average duty cycle per configured mining worker. The GPU percentage controls OpenCL kernel pacing. The plugin cannot throttle CUDA or AMD HIP child processes; when GPU mining is enabled on those backends, set `limits.gpu-percent` to `100`.
+
+The same defaults can be stored in `plugins/GeoCoinMinecraft/config.yml`:
+
+```yaml
+limits:
+  cpu-percent: 100
+  gpu-percent: 100
+```
+
 Available GPU devices depend on the installed driver/runtime and the official miner build. A backend can be selected even if the current machine has no matching device; the scan will explain that none were found.
 
 ## Console output
@@ -82,6 +102,9 @@ node:
 mining:
   address: "YOUR_GEOCOIN_ADDRESS"
   threads: 1
+limits:
+  cpu-percent: 100
+  gpu-percent: 100
 gpu:
   # Required only for cuda and amd (HIP); OpenCL runs in the Paper JVM.
   executable: "C:/GeoCoin/bin/geocoin-gpu-miner.exe"
@@ -105,7 +128,7 @@ The plugin rejects remote plain HTTP RPC URLs and allows HTTP only for loopback 
 
 ## Version
 
-Version 1.2.0 adds an in-process OpenCL backend. CUDA and AMD HIP still use the official GeoCoin GPU miner executable.
+Version 1.3.0 adds configurable CPU and in-process OpenCL duty-cycle limits. CUDA and AMD HIP still use the official GeoCoin GPU miner executable and cannot be throttled by this plugin.
 
 ## Related project
 

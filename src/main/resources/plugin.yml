@@ -1,12 +1,12 @@
 name: GeoCoinMinecraft
-version: 1.2.0
+version: 1.3.0
 main: org.noemacrypt.geocoinminecraft.GeoCoinMinecraftPlugin
 api-version: '26.3'
 description: Operator-controlled GeoCoin CPU and GPU miner for Paper (OpenCL in-process).
 commands:
   geocoin:
     description: Configure, start, stop, or inspect GeoCoin CPU and GPU mining.
-    usage: /geocoin <start|stop|status|gpu>
+    usage: /geocoin <start|stop|status|gpu|limit>
     permission: geocoin.admin
 permissions:
   geocoin.admin:

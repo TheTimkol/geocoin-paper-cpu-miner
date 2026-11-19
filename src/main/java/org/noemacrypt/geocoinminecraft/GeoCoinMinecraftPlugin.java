@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntSupplier;
 
 public final class GeoCoinMinecraftPlugin extends JavaPlugin {
     private static final int HEADER_BYTES = 124;
@@ -51,12 +52,16 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
     private volatile boolean openClRunning;
     private volatile boolean gpuEnabledForRun;
     private volatile long gpuHashesPerSecond;
+    private volatile int cpuPercent = 100;
+    private volatile int gpuPercent = 100;
     private volatile boolean logTemplateRefresh;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         logTemplateRefresh = getConfig().getBoolean("logging.template-refresh", false);
+        cpuPercent = clampPercent(getConfig().getInt("limits.cpu-percent", 100));
+        gpuPercent = clampPercent(getConfig().getInt("limits.gpu-percent", 100));
         getLogger().info("Loaded. Mining is stopped; an operator can run /geocoin start.");
     }
 
@@ -72,6 +77,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
             case "stop" -> stopMiner(sender);
             case "status" -> sender.sendMessage(statusMessage());
             case "gpu" -> handleGpuCommand(sender, args);
+            case "limit" -> handleLimitCommand(sender, args);
             default -> { return false; }
         }
         return true;
@@ -80,7 +86,13 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (!sender.hasPermission("geocoin.admin")) return List.of();
-        if (args.length == 1) return matching(List.of("start", "stop", "status", "gpu"), args[0]);
+        if (args.length == 1) return matching(List.of("start", "stop", "status", "gpu", "limit"), args[0]);
+        if (args[0].equalsIgnoreCase("limit")) {
+            if (args.length == 2) return matching(List.of("cpu", "gpu", "status"), args[1]);
+            if (args.length == 3 && List.of("cpu", "gpu").contains(args[1].toLowerCase(Locale.ROOT)))
+                return matching(List.of("0", "25", "50", "75", "100"), args[2]);
+            return List.of();
+        }
         if (!args[0].equalsIgnoreCase("gpu")) return List.of();
         if (args.length == 2) return matching(List.of("backends", "backend", "devices", "device", "enable", "disable", "status"), args[1]);
         if (args.length == 3 && args[1].equalsIgnoreCase("backend"))
@@ -94,6 +106,38 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         String normalized = prefix.toLowerCase(Locale.ROOT);
         return options.stream().filter(option -> option.startsWith(normalized)).toList();
     }
+
+    private void handleLimitCommand(CommandSender sender, String[] args) {
+        if (args.length == 2 && args[1].equalsIgnoreCase("status")) {
+            sender.sendMessage(ChatColor.GREEN + "Resource limits: CPU " + cpuPercent + "%; GPU " + gpuPercent + "%" +
+                    ("opencl".equalsIgnoreCase(getConfig().getString("gpu.backend", "opencl")) ? " (OpenCL duty cycle)." : " (GPU cap applies to OpenCL only)."));
+            return;
+        }
+        if (args.length != 3 || !(args[1].equalsIgnoreCase("cpu") || args[1].equalsIgnoreCase("gpu"))) {
+            sender.sendMessage(ChatColor.YELLOW + "Usage: /geocoin limit <cpu|gpu> <0-100>, or /geocoin limit status");
+            return;
+        }
+        int percent;
+        try { percent = Integer.parseInt(args[2]); }
+        catch (NumberFormatException e) { sender.sendMessage(ChatColor.RED + "Limit must be a whole number from 0 to 100."); return; }
+        if (percent < 0 || percent > 100) {
+            sender.sendMessage(ChatColor.RED + "Limit must be between 0 and 100 percent.");
+            return;
+        }
+        if (args[1].equalsIgnoreCase("gpu") && !"opencl".equalsIgnoreCase(getConfig().getString("gpu.backend", "opencl"))) {
+            sender.sendMessage(ChatColor.RED + "GPU percentage throttling is supported for OpenCL only. Select /geocoin gpu backend opencl first; CUDA/HIP are not capped by the plugin.");
+            return;
+        }
+        String key = args[1].equalsIgnoreCase("cpu") ? "limits.cpu-percent" : "limits.gpu-percent";
+        getConfig().set(key, percent);
+        saveConfig();
+        if (args[1].equalsIgnoreCase("cpu")) cpuPercent = percent;
+        else gpuPercent = percent;
+        sender.sendMessage(ChatColor.GREEN + args[1].toUpperCase(Locale.ROOT) + " mining resource limit set to " + percent + "%." +
+                (percent == 0 ? " Mining work for this device is paused." : " The change applies immediately."));
+    }
+
+    private int clampPercent(int value) { return Math.max(0, Math.min(100, value)); }
 
     private void handleGpuCommand(CommandSender sender, String[] args) {
         if (args.length < 2) {
@@ -341,6 +385,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         boolean gpuEnabled = getConfig().getBoolean("gpu.enabled", false);
         String backend = normalizeBackend(getConfig().getString("gpu.backend", "opencl"));
         int device = getConfig().getInt("gpu.device", -1);
+        int configuredGpuPercent = clampPercent(getConfig().getInt("limits.gpu-percent", 100));
         if (urlText.isBlank() || username.isBlank() || passName.isBlank() || address.isBlank())
             throw new IllegalArgumentException("set node.url, node.username, node.password-file, and mining.address in config.yml");
         if (threads < 1 || threads > 256) throw new IllegalArgumentException("mining.threads must be between 1 and 256");
@@ -360,6 +405,8 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         String pass = Files.readString(password, StandardCharsets.UTF_8).lines().findFirst().orElse("").trim();
         if (pass.isEmpty()) throw new IllegalArgumentException("password file is empty");
         if (backend == null) throw new IllegalArgumentException("gpu.backend must be opencl, cuda, or amd (HIP)");
+        if (gpuEnabled && !"opencl".equals(backend) && configuredGpuPercent < 100)
+            throw new IllegalArgumentException("limits.gpu-percent is supported only for OpenCL; set it to 100 before starting CUDA/HIP mining");
         Path gpuExecutable = resolveGpuExecutable();
         if (gpuEnabled && !"opencl".equals(backend) && !Files.isRegularFile(gpuExecutable))
             throw new IllegalArgumentException("GPU miner executable not found: " + gpuExecutable);
@@ -387,10 +434,10 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
     private boolean isMiningActive() { return isCpuRunning() || isGpuRunning(); }
 
     private String statusMessage() {
-        String cpu = isCpuRunning() ? "CPU running (~" + hashesPerSecond + " H/s)" : "CPU stopped";
+        String cpu = isCpuRunning() ? "CPU running (~" + hashesPerSecond + " H/s, limit " + cpuPercent + "%)" : "CPU stopped (limit " + cpuPercent + "%)";
         String backend = getConfig().getString("gpu.backend", "opencl");
         String gpu = isGpuRunning() ? displayBackend(backend) + " GPU " + getConfig().getInt("gpu.device", -1) +
-                " running (~" + gpuHashesPerSecond + " H/s)" : "GPU " + (getConfig().getBoolean("gpu.enabled", false) ? "enabled, stopped" : "disabled");
+                " running (~" + gpuHashesPerSecond + " H/s, limit " + gpuPercent + "%)" : "GPU " + (getConfig().getBoolean("gpu.enabled", false) ? "enabled, stopped (limit " + gpuPercent + "%)" : "disabled (limit " + gpuPercent + "%)");
         return (isMiningActive() ? ChatColor.GREEN : ChatColor.YELLOW) + "GeoCoin mining: " + cpu + "; " + gpu + ".";
     }
 
@@ -398,8 +445,8 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         String backend = getConfig().getString("gpu.backend", "opencl");
         int device = getConfig().getInt("gpu.device", -1);
         String selected = device < 0 ? "no GPU selected" : displayBackend(backend) + " GPU " + device;
-        String process = isGpuRunning() ? ("opencl".equalsIgnoreCase(backend) ? "running in Paper JVM" : "running (~" + gpuHashesPerSecond + " H/s)") : "stopped";
-        return ChatColor.GREEN + "GPU mining: " + selected + "; " + (getConfig().getBoolean("gpu.enabled", false) ? "enabled" : "disabled") + "; process " + process + ".";
+        String process = isGpuRunning() ? ("opencl".equalsIgnoreCase(backend) ? "running in Paper JVM (~" + gpuHashesPerSecond + " H/s)" : "running (~" + gpuHashesPerSecond + " H/s)") : "stopped";
+        return ChatColor.GREEN + "GPU mining: " + selected + "; " + (getConfig().getBoolean("gpu.enabled", false) ? "enabled" : "disabled") + "; limit " + gpuPercent + "%; " + process + ".";
     }
 
     private void stopMiner(CommandSender sender) {
@@ -566,7 +613,12 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
                 catch (NoSuchAlgorithmException e) { running.set(false); return; }
                 long nonce = Integer.toUnsignedLong(workerId);
                 long localHashes = 0;
+                long throttleWindow = System.nanoTime();
                 while (running.get() && !stopRequested.get() && System.nanoTime() < deadline) {
+                    if (cpuPercent == 0) {
+                        throttleWindow = pauseCpuWorker(throttleWindow, running);
+                        continue;
+                    }
                     ByteBuffer.wrap(candidate).order(ByteOrder.LITTLE_ENDIAN).putLong(NONCE_OFFSET, nonce);
                     sha.update(candidate, 0, HEADER_BYTES);
                     byte[] digest = sha.digest(sha.digest());
@@ -579,6 +631,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
                     if ((localHashes & 2047) == 0) {
                         totalHashes.addAndGet(2048);
                         localHashes = 0;
+                        throttleWindow = throttleCpuWorker(throttleWindow, running);
                     }
                 }
                 totalHashes.addAndGet(localHashes);
@@ -593,9 +646,11 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
             openClCancel.set(false);
             openClWorker = new Thread(() -> {
                 try {
-                    Long nonce = OpenClGeoPow.mine(block, target, settings.gpu.device, running, openClCancel, deadline,
+                    Long nonce = OpenClGeoPow.mine(block, target, settings.gpu.device, running, openClCancel, () -> gpuPercent, deadline,
                             rate -> gpuHashesPerSecond = rate);
                     if (nonce != null && winner.compareAndSet(null, nonce)) running.set(false);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 } catch (IOException | RuntimeException e) {
                     if (!stopRequested.get()) getLogger().severe("OpenCL GPU mining failed; CPU search continues: " + e.getMessage());
                 } finally {
@@ -622,6 +677,31 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         }
         long elapsed = (System.nanoTime() - start) / 1_000_000L;
         return new MiningResult(winner.get(), totalHashes.get(), elapsed);
+    }
+
+    private long throttleCpuWorker(long windowStart, AtomicBoolean running) {
+        int percent = cpuPercent;
+        long now = System.nanoTime();
+        long activeNanos = now - windowStart;
+        if (percent >= 100 || activeNanos < TimeUnit.MILLISECONDS.toNanos(20)) return windowStart;
+        long desiredNanos = activeNanos * 100 / percent;
+        sleepWhileActive(desiredNanos - activeNanos, running);
+        return System.nanoTime();
+    }
+
+    private long pauseCpuWorker(long windowStart, AtomicBoolean running) {
+        sleepWhileActive(TimeUnit.MILLISECONDS.toNanos(100), running);
+        return System.nanoTime();
+    }
+
+    private void sleepWhileActive(long nanos, AtomicBoolean running) {
+        long remaining = nanos;
+        while (remaining > 0 && running.get() && !stopRequested.get()) {
+            long part = Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100));
+            try { TimeUnit.NANOSECONDS.sleep(part); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); running.set(false); return; }
+            remaining -= part;
+        }
     }
 
     private JsonElement rpc(MinerSettings settings, String method, JsonElement params) throws IOException, InterruptedException {

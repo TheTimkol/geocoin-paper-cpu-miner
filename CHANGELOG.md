@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- Add runtime CPU duty-cycle cap from 0 to 100 percent.
+- Add runtime OpenCL GPU duty-cycle cap from 0 to 100 percent.
+- Expose live limits and rates in `/geocoin status` and `/geocoin limit status`.
+- Explain that this plugin cannot throttle CUDA/HIP child processes.
+
 ## 1.2.0
 
 - Run OpenCL GPU mining in a Java worker thread inside the Paper JVM using the bundled JOCL bindings and kernel.
