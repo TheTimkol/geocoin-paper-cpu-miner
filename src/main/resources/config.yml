@@ -9,6 +9,14 @@ mining:
   address: ""
   # Mining runs in Java worker threads inside the Paper process.
   threads: 1
+gpu:
+  # Set this path to the official GeoCoin GPU miner executable.
+  executable: "geocoin-gpu-miner.exe"
+  # Select from chat: opencl, cuda, or amd (AMD HIP).
+  backend: "opencl"
+  # Device id from /geocoin gpu devices. -1 means none selected.
+  device: -1
+  enabled: false
 logging:
   # Template refresh occurs every 10 seconds; disable routine refresh lines by default.
   # Startup, stop, errors, and accepted blocks are always logged.

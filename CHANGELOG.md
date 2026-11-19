@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 - 2026-11-19
+
+- Added operator chat commands to select OpenCL, CUDA, or AMD HIP and enumerate/select a compatible GPU.
+- Added managed GPU miner launch, status, and graceful stop alongside CPU mining.
+- Persisted GPU selections in the plugin config; GPU mining remains opt-in.
+- Added tab completion for command choices.
+
 ## 1.0.0 - 2026-11-19
 
 - First public CPU-only release.
