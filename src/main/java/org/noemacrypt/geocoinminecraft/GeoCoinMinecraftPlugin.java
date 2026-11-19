@@ -44,9 +44,12 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
     private static final Pattern DEVICE_LINE = Pattern.compile("^\\s*(opencl|cuda|hip):(\\d+)\\s+(.+?)\\s*$", Pattern.CASE_INSENSITIVE);
     private final AtomicBoolean stopRequested = new AtomicBoolean(true);
     private final AtomicBoolean gpuStopPending = new AtomicBoolean(false);
+    private final AtomicBoolean openClCancel = new AtomicBoolean(true);
     private volatile Thread controller;
     private volatile long hashesPerSecond;
     private volatile Process gpuMiner;
+    private volatile boolean openClRunning;
+    private volatile boolean gpuEnabledForRun;
     private volatile long gpuHashesPerSecond;
     private volatile boolean logTemplateRefresh;
 
@@ -186,7 +189,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
 
     private void scanGpuDevices(CommandSender sender, String backend, Integer selectId) {
         Path executable = resolveGpuExecutable();
-        if (!Files.isRegularFile(executable)) {
+        if (!"opencl".equals(backend) && !Files.isRegularFile(executable)) {
             sender.sendMessage(ChatColor.RED + "GPU miner executable not found: " + executable);
             sender.sendMessage(ChatColor.YELLOW + "Set gpu.executable in plugins/GeoCoinMinecraft/config.yml, then restart Paper.");
             return;
@@ -194,7 +197,11 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         sender.sendMessage(ChatColor.GRAY + "Scanning " + displayBackend(backend) + " devices...");
         Thread scan = new Thread(() -> {
             List<GpuDevice> devices;
-            try { devices = discoverGpuDevices(executable, backend); }
+            try {
+                if ("opencl".equals(backend)) {
+                    devices = OpenClGeoPow.devices().stream().map(device -> new GpuDevice(device.id(), device.name())).toList();
+                } else devices = discoverGpuDevices(executable, backend);
+            }
             catch (Exception e) {
                 try {
                     getServer().getScheduler().runTask(this, () -> {
@@ -277,13 +284,18 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
             sender.sendMessage(ChatColor.RED + "Choose a backend and GPU first: /geocoin gpu backend <opencl|cuda|amd>, then /geocoin gpu devices.");
             return;
         }
-        if (enabled && !Files.isRegularFile(resolveGpuExecutable())) {
+        String backend = normalizeBackend(getConfig().getString("gpu.backend", "opencl"));
+        if (enabled && !"opencl".equals(backend) && !Files.isRegularFile(resolveGpuExecutable())) {
             sender.sendMessage(ChatColor.RED + "GPU miner executable not found: " + resolveGpuExecutable());
             return;
         }
         getConfig().set("gpu.enabled", enabled);
+        gpuEnabledForRun = enabled;
         saveConfig();
-        if (!enabled) requestGpuStop();
+        if (!enabled) {
+            openClCancel.set(true);
+            requestGpuStop();
+        }
         sender.sendMessage(ChatColor.GREEN + "GPU mining " + (enabled ? "enabled" : "disabled") + ".");
     }
 
@@ -295,20 +307,25 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         try {
             MinerSettings settings = readSettings();
             if (settings.gpu.enabled) {
-                try {
-                    startGpuMiner(settings);
-                } catch (Exception e) {
-                    getLogger().severe("Could not start GPU miner; CPU mining will continue: " + e.getMessage());
-                    sender.sendMessage(ChatColor.RED + "GPU miner could not start; CPU mining will continue. See server console.");
+                if (!"opencl".equals(settings.gpu.backend)) {
+                    try {
+                        startGpuMiner(settings);
+                    } catch (Exception e) {
+                        getLogger().severe("Could not start GPU miner; CPU mining will continue: " + e.getMessage());
+                        sender.sendMessage(ChatColor.RED + "GPU miner could not start; CPU mining will continue. See server console.");
+                    }
                 }
             }
             stopRequested.set(false);
+            gpuEnabledForRun = settings.gpu.enabled;
+            openClCancel.set(false);
             Thread worker = new Thread(() -> mineForever(settings), "geocoin-paper-miner");
             worker.setDaemon(true);
             controller = worker;
             worker.start();
             sender.sendMessage(ChatColor.GREEN + "GeoCoin CPU miner started" + (isGpuRunning() ? " with GPU." : "."));
-            getLogger().info("GeoCoin CPU mining started inside Paper (" + settings.threads + " worker threads)." + (isGpuRunning() ? " GPU miner process is running." : ""));
+            getLogger().info("GeoCoin CPU mining started inside Paper (" + settings.threads + " worker threads)." +
+                    (settings.gpu.enabled ? ("opencl".equals(settings.gpu.backend) ? " OpenCL runs in the Paper JVM." : " Native GPU miner process started.") : ""));
         } catch (Exception e) {
             sender.sendMessage(ChatColor.RED + "Could not start miner: " + e.getMessage());
             getLogger().severe("Could not start GeoCoin miner: " + e.getMessage());
@@ -344,7 +361,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         if (pass.isEmpty()) throw new IllegalArgumentException("password file is empty");
         if (backend == null) throw new IllegalArgumentException("gpu.backend must be opencl, cuda, or amd (HIP)");
         Path gpuExecutable = resolveGpuExecutable();
-        if (gpuEnabled && !Files.isRegularFile(gpuExecutable))
+        if (gpuEnabled && !"opencl".equals(backend) && !Files.isRegularFile(gpuExecutable))
             throw new IllegalArgumentException("GPU miner executable not found: " + gpuExecutable);
         if (gpuEnabled && device < 0) throw new IllegalArgumentException("choose a GPU with /geocoin gpu devices before starting mining");
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -364,7 +381,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
 
     private boolean isGpuRunning() {
         Process process = gpuMiner;
-        return process != null && process.isAlive();
+        return openClRunning || (process != null && process.isAlive());
     }
 
     private boolean isMiningActive() { return isCpuRunning() || isGpuRunning(); }
@@ -381,7 +398,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         String backend = getConfig().getString("gpu.backend", "opencl");
         int device = getConfig().getInt("gpu.device", -1);
         String selected = device < 0 ? "no GPU selected" : displayBackend(backend) + " GPU " + device;
-        String process = isGpuRunning() ? "running (~" + gpuHashesPerSecond + " H/s)" : "stopped";
+        String process = isGpuRunning() ? ("opencl".equalsIgnoreCase(backend) ? "running in Paper JVM" : "running (~" + gpuHashesPerSecond + " H/s)") : "stopped";
         return ChatColor.GREEN + "GPU mining: " + selected + "; " + (getConfig().getBoolean("gpu.enabled", false) ? "enabled" : "disabled") + "; process " + process + ".";
     }
 
@@ -394,6 +411,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
             return;
         }
         stopRequested.set(true);
+        openClCancel.set(true);
         if (cpuWasRunning) current.interrupt();
         requestGpuStop();
         sender.sendMessage(ChatColor.GREEN + "Stop requested for GeoCoin CPU and GPU miners.");
@@ -498,7 +516,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
                 if (block.length < HEADER_BYTES) throw new IllegalStateException("node returned a short block template");
                 int bits = template.get("bits").getAsInt();
                 long height = template.get("height").getAsLong();
-                MiningResult result = mineTemplate(block, bits, settings.threads);
+                MiningResult result = mineTemplate(block, bits, settings);
                 hashesPerSecond = result.hashes * 1000L / Math.max(1, result.elapsedMillis);
                 if (stopRequested.get()) break;
                 if (result.nonce == null) {
@@ -530,7 +548,8 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
         }
     }
 
-    private MiningResult mineTemplate(byte[] block, int bits, int threads) throws InterruptedException {
+    private MiningResult mineTemplate(byte[] block, int bits, MinerSettings settings) throws InterruptedException {
+        int threads = settings.threads;
         BigInteger target = targetFromCompact(bits);
         AtomicBoolean running = new AtomicBoolean(true);
         AtomicReference<Long> winner = new AtomicReference<>();
@@ -568,9 +587,39 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
             workers.add(worker);
             worker.start();
         }
-        while (System.nanoTime() < deadline && !stopRequested.get() && winner.get() == null) Thread.sleep(25);
+        Thread openClWorker = null;
+        if (gpuEnabledForRun && settings.gpu.enabled && "opencl".equals(settings.gpu.backend)) {
+            openClRunning = true;
+            openClCancel.set(false);
+            openClWorker = new Thread(() -> {
+                try {
+                    Long nonce = OpenClGeoPow.mine(block, target, settings.gpu.device, running, openClCancel, deadline,
+                            rate -> gpuHashesPerSecond = rate);
+                    if (nonce != null && winner.compareAndSet(null, nonce)) running.set(false);
+                } catch (IOException | RuntimeException e) {
+                    if (!stopRequested.get()) getLogger().severe("OpenCL GPU mining failed; CPU search continues: " + e.getMessage());
+                } finally {
+                    openClRunning = false;
+                    gpuHashesPerSecond = 0;
+                }
+            }, "geocoin-opencl-miner");
+            openClWorker.setDaemon(true);
+            openClWorker.start();
+        }
+        try {
+            while (System.nanoTime() < deadline && !stopRequested.get() && winner.get() == null) Thread.sleep(25);
+        } catch (InterruptedException e) {
+            running.set(false);
+            for (Thread worker : workers) worker.interrupt();
+            if (openClWorker != null) openClWorker.interrupt();
+            throw e;
+        }
         running.set(false);
         for (Thread worker : workers) worker.join(2000);
+        if (openClWorker != null) {
+            openClWorker.join(2000);
+            if (openClWorker.isAlive()) openClWorker.interrupt();
+        }
         long elapsed = (System.nanoTime() - start) / 1_000_000L;
         return new MiningResult(winner.get(), totalHashes.get(), elapsed);
     }
@@ -620,6 +669,7 @@ public final class GeoCoinMinecraftPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         stopRequested.set(true);
+        openClCancel.set(true);
         Thread current = controller;
         if (current != null) current.interrupt();
         Process process = gpuMiner;

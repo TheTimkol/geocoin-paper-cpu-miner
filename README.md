@@ -1,20 +1,20 @@
 # GeoCoin Paper Miner
 
-A Paper plugin for operator-controlled GeoCoin mining using CPU threads inside the Paper server process and, optionally, the official GeoCoin GPU miner as a managed child process. The GPU backend and device can be selected from Minecraft chat. Mining never starts automatically.
+A Paper plugin for operator-controlled GeoCoin mining. CPU mining runs inside the Paper process. OpenCL GPU mining runs inside the Paper JVM through JOCL and a kernel bundled in the plugin JAR. CUDA and AMD HIP remain available through the official GeoCoin GPU miner as managed child processes. Mining never starts automatically.
 
 ## How it works
 
 1. An operator configures a GPU backend and device in chat, or leaves GPU mining disabled for CPU-only mining.
-2. `/geocoin start` fetches a block template using the configured miner-role JSON-RPC account and starts the Java CPU workers. If a GPU device is selected and enabled, it also launches `geocoin-gpu-miner` with the same node, reward address, backend, and device.
-3. CPU workers search nonce values with double SHA-256 in the Paper JVM. The GPU miner performs proof-of-work on the selected device.
+2. `/geocoin start` fetches a block template using the configured miner-role JSON-RPC account and starts the Java CPU workers. If OpenCL is selected and enabled, it also starts OpenCL work in a Java worker thread in the Paper JVM. CUDA and HIP start the official GPU miner binary.
+3. CPU workers and the OpenCL kernel search nonce values using GeoCoin's double SHA-256 proof-of-work.
 4. Both miners submit candidate blocks to the GeoCoin node. `/geocoin status` reports CPU and GPU state and their recent rates.
-5. `/geocoin stop` stops CPU workers and asks the GPU process to exit. Paper shutdown also stops the GPU process.
+5. `/geocoin stop` stops CPU workers and cancels OpenCL work, or asks the native GPU process to exit. Paper shutdown also stops mining.
 
 Mining uses the Paper host's computing resources and may affect Minecraft tick time, heat, and power use. Start with a small CPU thread count and observe the server before increasing it.
 
 ## GPU selection in chat
 
-Configure `gpu.executable` in `plugins/GeoCoinMinecraft/config.yml` to point to the official `geocoin-gpu-miner` binary. Example for Windows:
+OpenCL does not need `geocoin-gpu-miner.exe`; the bundled kernel runs in the plugin JVM. The host still needs a GPU driver with an OpenCL runtime. The `gpu.executable` path is only used by CUDA and AMD HIP. Example for those backends on Windows:
 
 ```yaml
 gpu:
@@ -32,13 +32,13 @@ Then restart Paper and run these commands as an operator:
 /geocoin start
 ```
 
-Selecting a backend clears the previous device selection and scans for compatible devices. Choose a device ID from the list. `amd` selects the GeoCoin miner's HIP backend; on AMD hardware, OpenCL may also be available. `cuda` requires a compatible NVIDIA CUDA setup. Device IDs are backend-local.
+Selecting a backend clears the previous device selection and scans for compatible devices. Choose a device ID from the list. OpenCL computes in the plugin JVM; CUDA and AMD use the official native miner. Device IDs are backend-local.
 
 Other commands:
 
 - `/geocoin gpu devices` — scan the selected backend again.
-- `/geocoin gpu enable` and `/geocoin gpu disable` — toggle GPU use for the next start. Selection and backend changes require mining to be stopped.
-- `/geocoin gpu status` — show selected backend/device and GPU process state.
+- `/geocoin gpu enable` — enable GPU mining for the next start. `/geocoin gpu disable` cancels GPU work; CPU mining can continue. Selection and backend changes require mining to be stopped.
+- `/geocoin gpu status` — show selected backend/device and whether in-JVM OpenCL or the native miner is active.
 - `/geocoin start`, `/geocoin stop`, `/geocoin status` — manage the combined miner.
 
 Available GPU devices depend on the installed driver/runtime and the official miner build. A backend can be selected even if the current machine has no matching device; the scan will explain that none were found.
@@ -57,7 +57,8 @@ Run this only on a server and hardware you own or are authorized to use. Tell se
 - Java 25
 - Maven 3.9 or newer to build
 - A running GeoCoin node with miner-role JSON-RPC enabled
-- For GPU mining, the official `geocoin-gpu-miner` build and a compatible GPU driver/runtime
+- For OpenCL GPU mining, a GPU driver/runtime that provides OpenCL
+- For CUDA or AMD HIP mining, the official `geocoin-gpu-miner` build and compatible GPU drivers
 
 ## Build
 
@@ -65,7 +66,7 @@ Run this only on a server and hardware you own or are authorized to use. Tell se
 mvn clean package -DskipTests
 ```
 
-The plugin JAR is written to `target/GeoCoinMinecraft.jar`. Paper provides Gson at runtime; it is not bundled in the JAR.
+The plugin JAR is written to `target/GeoCoinMinecraft.jar`. JOCL and its supported native bindings are bundled; the machine still needs a vendor OpenCL driver/runtime. Paper provides Gson at runtime.
 
 ## Install and configure
 
@@ -82,6 +83,7 @@ mining:
   address: "YOUR_GEOCOIN_ADDRESS"
   threads: 1
 gpu:
+  # Required only for cuda and amd (HIP); OpenCL runs in the Paper JVM.
   executable: "C:/GeoCoin/bin/geocoin-gpu-miner.exe"
   backend: "opencl"
   device: -1
@@ -103,12 +105,13 @@ The plugin rejects remote plain HTTP RPC URLs and allows HTTP only for loopback 
 
 ## Version
 
-Version 1.1.0 adds configurable GPU backend/device selection while retaining CPU-only mode.
+Version 1.2.0 adds an in-process OpenCL backend. CUDA and AMD HIP still use the official GeoCoin GPU miner executable.
 
 ## Related project
 
-This plugin integrates with [NoemaCrypt/GeoCoin](https://github.com/NoemaCrypt/GeoCoin), which provides the node, RPC interface, and GPU miner.
+This plugin integrates with [NoemaCrypt/GeoCoin](https://github.com/NoemaCrypt/GeoCoin), which provides the node, RPC interface, and optional native CUDA/HIP miner. OpenCL bindings are provided by [JOCL](https://github.com/gpu/JOCL).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The plugin is MIT licensed. JOCL is separately MIT licensed; its copyright and
+license notice is included in [JOCL-LICENSE.txt](JOCL-LICENSE.txt).

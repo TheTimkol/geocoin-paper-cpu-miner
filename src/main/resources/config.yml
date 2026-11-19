@@ -10,9 +10,9 @@ mining:
   # Mining runs in Java worker threads inside the Paper process.
   threads: 1
 gpu:
-  # Set this path to the official GeoCoin GPU miner executable.
+  # Used only by cuda and amd (HIP). OpenCL runs inside the Paper JVM.
   executable: "geocoin-gpu-miner.exe"
-  # Select from chat: opencl, cuda, or amd (AMD HIP).
+  # Select from chat: opencl (in-process), cuda, or amd (HIP via native miner).
   backend: "opencl"
   # Device id from /geocoin gpu devices. -1 means none selected.
   device: -1

@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.noemacrypt</groupId>
   <artifactId>geocoin-paper-miner</artifactId>
-  <version>1.1.0</version>
+  <version>1.2.0</version>
   <name>GeoCoin Paper Miner</name>
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
@@ -19,12 +19,23 @@
     <dependency>
       <groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.11.0</version><scope>provided</scope>
     </dependency>
+    <dependency>
+      <groupId>org.jocl</groupId><artifactId>jocl</artifactId><version>2.0.6</version>
+    </dependency>
   </dependencies>
   <build>
     <finalName>GeoCoinMinecraft</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.0</version>
+        <executions><execution><phase>package</phase><goals><goal>shade</goal></goals>
+          <configuration><createDependencyReducedPom>false</createDependencyReducedPom>
+            <filters><filter><artifact>*:*</artifact><excludes><exclude>META-INF/*.SF</exclude><exclude>META-INF/*.DSA</exclude><exclude>META-INF/*.RSA</exclude></excludes></filter></filters>
+          </configuration>
+        </execution></executions>
       </plugin>
     </plugins>
   </build>
