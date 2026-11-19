@@ -1,0 +1,15 @@
+# Mining does not start automatically. Use /geocoin start as an operator.
+node:
+  # Remote RPC requires HTTPS. Plain HTTP is accepted only for localhost.
+  url: "https://your-node.example:3033/"
+  username: "minecraft-miner"
+  # File's first line is the miner-role RPC password; never use the admin password.
+  password-file: "rpc-miner.pass"
+mining:
+  address: ""
+  # Mining runs in Java worker threads inside the Paper process.
+  threads: 1
+logging:
+  # Template refresh occurs every 10 seconds; disable routine refresh lines by default.
+  # Startup, stop, errors, and accepted blocks are always logged.
+  template-refresh: false

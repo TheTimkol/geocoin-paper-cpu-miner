@@ -1,0 +1,9 @@
+/target/
+*.class
+*.jar
+*.pass
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
