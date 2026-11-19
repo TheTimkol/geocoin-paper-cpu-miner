@@ -2,6 +2,10 @@
 
 A CPU-only GeoCoin mining plugin for Paper. It searches for GeoCoin proof-of-work using worker threads inside the Paper server's Java process and submits valid blocks to a GeoCoin node over the miner-role JSON-RPC API. It does not launch another miner process and contains no GPU mining code.
 
+## Related project
+
+This plugin is a Paper integration for [NoemaCrypt/GeoCoin](https://github.com/NoemaCrypt/GeoCoin), which provides the GeoCoin node and JSON-RPC interface. The plugin contains only the Paper-side CPU miner; run and configure the node separately.
+
 ## How it works
 
 1. An operator starts mining with `/geocoin start`. Mining is stopped when Paper loads the plugin and never starts automatically.
